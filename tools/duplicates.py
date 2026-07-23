@@ -117,7 +117,11 @@ def run_duplicate_analysis(input_file_path):
             elif ext_lower_check.endswith('.xlsx'):
                 return pd.read_excel(filepath, engine='openpyxl')
             elif ext_lower_check.endswith('.txt'):
-                return pd.read_csv(filepath, sep=None, engine='python')
+                #return pd.read_csv(filepath, sep='\n', header=None, dtype=str engine='python')
+                try:
+                    return pd.read_csv(filepath, sep='\n', header=None, dtype=str, skip_blank_lines=False, encoding='utf-8-sig')
+                except UnicodeDecodeError:
+                    return pd.read_csv(filepath, sep='\n', header=None, dtype=str, skip_blank_lines=False, encoding='latin1')
             else:
                 raise ValueError(f"Unsupported file type for {filepath}")
         except Exception as e:
@@ -153,7 +157,13 @@ def run_duplicate_analysis(input_file_path):
         elif ext_lower_check.endswith('.csv'):
             df.to_csv(safe_filepath, index=False)
         elif ext_lower_check.endswith('.txt'):
-            df.to_csv(safe_filepath, index=False, sep='\t')
+            # df.to_csv(safe_filepath, index=False, sep='\t')
+            if "DUPLICATES_LOG" in safe_filepath:
+                df.columns = ['Raw Line Entry', 'Total Occurrences', 'Duplicate Count (Repeated Times)']
+                df.to_csv(safe_filepath, index=False, sep=';', header=True, encoding='utf-8-sig')
+            else:
+                df.to_csv(safe_filepath, index=False, header=False, encoding='utf-8-sig')
+                
         return safe_filepath
 
     # Load the source data
