@@ -19,17 +19,21 @@ def run_difference_analysis(file_a_path, file_b_path):
         ext = filepath.lower()
         try:
             if ext.endswith('.csv'):
-                return pd.read_csv(filepath, header=None, usecols=[0])
+                try:
+                    return pd.read_csv(filepath, header=None, usecols=[0], dtype=str, encoding='utf-8-sig')
+                except UnicodeDecodeError:
+                    return pd.read_csv(filepath, header=None, usecols=[0], dtype=str, encoding='latin1')
             elif ext.endswith('.xlsx'):
-                return pd.read_excel(filepath, header=None, usecols=[0])
+                return pd.read_excel(filepath, engine='openpyxl', header=None, usecols=[0], dtype=str)
             elif ext.endswith('.txt'):
                 try:
-                    return pd.read_csv(filepath, sep='\n', header=None, usecols=[0])
-                except ValueError:
-                    try:
-                        return pd.read_csv(filepath, sep='\t', header=None, usecols=[0])
-                    except ValueError:
-                        return pd.read_csv(filepath, sep=',', header=None, usecols=[0])
+                    encoding = 'utf-8-sig'
+                    with open(filepath, encoding=encoding) as f:
+                        return pd.DataFrame(f.read().splitlines())
+                except UnicodeDecodeError:
+                    encoding = 'latin1'
+                    with open(filepath, encoding=encoding) as f:
+                        return pd.DataFrame(f.read().splitlines())
             else:
                 raise ValueError(f"Unsupported file type for {filepath}")
         except Exception as e:
@@ -99,3 +103,8 @@ def run_difference_analysis(file_a_path, file_b_path):
 
     # Return the file names to the UI so we can display them in the popup
     return saved_a_path, saved_b_path
+
+if __name__ == '__main__':
+    loc_a = '/Users/an0045/Desktop/PythonPrograms/data/BASF_PM01_DOCS.XLSX'
+    loc_b = '/Users/an0045/Desktop/PythonPrograms/data/BASF_PM01_MIG.XLSX'
+    run_difference_analysis(loc_a, loc_b)

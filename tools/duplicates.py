@@ -111,22 +111,31 @@ def run_duplicate_analysis(input_file_path):
     # Helper function to load CSV or Excel safely
     def load_data(filepath):
         ext_lower_check = filepath.lower()
+
         try:
-            if ext_lower_check.endswith('.csv'):
-                return pd.read_csv(filepath)
-            elif ext_lower_check.endswith('.xlsx'):
-                return pd.read_excel(filepath, engine='openpyxl')
-            elif ext_lower_check.endswith('.txt'):
-                #return pd.read_csv(filepath, sep='\n', header=None, dtype=str engine='python')
+            if ext_lower_check.endswith(".csv"):
+                return pd.read_csv(filepath, dtype=str)
+
+            elif ext_lower_check.endswith(".xlsx"):
+                return pd.read_excel(filepath, engine="openpyxl", dtype=str)
+
+            elif ext_lower_check.endswith(".txt"):
                 try:
-                    return pd.read_csv(filepath, sep='\n', header=None, dtype=str, skip_blank_lines=False, encoding='utf-8-sig')
+                    encoding = "utf-8-sig"
+                    with open(filepath, encoding=encoding) as f:
+                        lines = [line.rstrip("\r\n") for line in f]
                 except UnicodeDecodeError:
-                    return pd.read_csv(filepath, sep='\n', header=None, dtype=str, skip_blank_lines=False, encoding='latin1')
+                    with open(filepath, encoding="latin1") as f:
+                        lines = [line.rstrip("\r\n") for line in f]
+
+                return pd.DataFrame(lines, columns=["Raw Line Entry"])
+
             else:
                 raise ValueError(f"Unsupported file type for {filepath}")
+
         except Exception as e:
             print(f"\nError reading {filepath}. Ensure the file is not corrupted or open in another program.")
-            raise e
+            raise
 
     # Helper function to generate a unique filename so we never overwrite
     def get_unique_filename(filepath):
@@ -202,3 +211,7 @@ def run_duplicate_analysis(input_file_path):
         saved_duplicates_path = save_file(df_duplicates, output_duplicates_target)
 
     return saved_clean_path, saved_duplicates_path
+
+if __name__ == '__main__':
+    loc = '/Users/an0045/Desktop/PythonPrograms/data/BUS0010_BUS0010_2CFL_P1.txt'
+    run_duplicate_analysis(loc)
