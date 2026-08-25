@@ -3,22 +3,37 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox
 from utils.config import get_setting, update_setting
 from tools.duplicates import run_duplicate_analysis
+from ui.help_dialog import show_help_dialog
 
 class DuplicateFrame(ctk.CTkFrame):
     def __init__(self, parent):
         super().__init__(parent, corner_radius=0, fg_color="transparent")
         
         self.input_file_path = ""
+        self.has_header_var = ctk.BooleanVar(value=False)
 
         self.grid_columnconfigure(0, weight=1)
 
-        # 1. Title
+        # 1. Title (with "How to Use" button alongside it)
+        self.title_row = ctk.CTkFrame(self, fg_color="transparent")
+        self.title_row.grid(row=0, column=0, padx=40, pady=(40, 20), sticky="ew")
+        self.title_row.grid_columnconfigure(0, weight=1)
+
         self.title_label = ctk.CTkLabel(
-            self, 
+            self.title_row, 
             text="Duplicate Finder", 
             font=ctk.CTkFont(size=24, weight="bold")
         )
-        self.title_label.grid(row=0, column=0, padx=40, pady=(40, 20), sticky="w")
+        self.title_label.grid(row=0, column=0, sticky="w")
+
+        self.btn_help = ctk.CTkButton(
+            self.title_row, text="❓ How to Use", width=120, height=28,
+            fg_color="transparent", border_width=1,
+            text_color=("gray10", "gray90"), hover_color=("gray85", "gray20"),
+            font=ctk.CTkFont(size=12),
+            command=self.show_help
+        )
+        self.btn_help.grid(row=0, column=1, sticky="e")
 
         # Description
         self.desc_label = ctk.CTkLabel(
@@ -44,7 +59,17 @@ class DuplicateFrame(ctk.CTkFrame):
         )
         self.lbl_file.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
 
-        # 3. Action Button (Run)
+        # 3. Header Option - user decides per run whether the file has a header row
+        self.chk_has_header = ctk.CTkCheckBox(
+            self,
+            text="File includes a header row (first row is column titles, not data)",
+            variable=self.has_header_var,
+            onvalue=True,
+            offvalue=False
+        )
+        self.chk_has_header.grid(row=3, column=0, padx=40, pady=(10, 0), sticky="w")
+
+        # 4. Action Button (Run)
         self.btn_run = ctk.CTkButton(
             self, 
             text="Remove Duplicates", 
@@ -54,13 +79,41 @@ class DuplicateFrame(ctk.CTkFrame):
             height=40,
             command=self.execute_tool
         )
-        self.btn_run.grid(row=3, column=0, padx=40, pady=40, sticky="w")
+        self.btn_run.grid(row=4, column=0, padx=40, pady=40, sticky="w")
 
     def get_initial_dir(self):
         last_dir = get_setting("last_opened_folder")
         if os.path.exists(last_dir):
             return last_dir
         return os.path.expanduser("~")
+
+    def show_help(self):
+        content = (
+            "DUPLICATE FINDER\n"
+            "Scans a single file for rows that are repeated, and produces a "
+            "cleaned copy plus a log of what was removed.\n\n"
+            "WHAT TO UPLOAD\n"
+            "- One file. Supported formats: .xlsx, .csv, .txt\n\n"
+            "HEADER ROW\n"
+            "- Check \"File includes a header row\" if the first row is "
+            "column titles, not data.\n"
+            "- Leave it unchecked if the file starts straight with data.\n"
+            "- If this is set wrong on a headerless file, the first real "
+            "row of data gets silently treated as a header and disappears "
+            "from the results.\n\n"
+            "WHAT COUNTS AS A DUPLICATE\n"
+            "- A row must match COMPLETELY (every column) to be treated as "
+            "a repeat.\n"
+            "- Leading/trailing spaces are ignored. Capitalization matters.\n\n"
+            "WHAT YOU GET\n"
+            "- _CLEANED: the file with duplicates removed (the first "
+            "occurrence of each entry is kept).\n"
+            "- _DUPLICATES_LOG: shows each duplicated entry and how many "
+            "times it was repeated. Only created if duplicates were "
+            "actually found.\n"
+            "- Both are saved next to the original, in the same format."
+        )
+        show_help_dialog(self, "How to Use: Duplicate Finder", content)
 
     def browse_file(self):
         file_path = filedialog.askopenfilename(
@@ -82,7 +135,10 @@ class DuplicateFrame(ctk.CTkFrame):
         self.update()
 
         try:
-            saved_clean, saved_dup = run_duplicate_analysis(self.input_file_path)
+            saved_clean, saved_dup = run_duplicate_analysis(
+                self.input_file_path,
+                has_header=self.has_header_var.get()
+            )
             
             # Construct intelligent success feedback
             msg_parts = ["Separation complete!\n"]
@@ -101,3 +157,4 @@ class DuplicateFrame(ctk.CTkFrame):
             messagebox.showerror("Processing Error", f"An error occurred:\n\n{str(e)}")
         finally:
             self.btn_run.configure(state="normal", text="Remove Duplicates")
+            
