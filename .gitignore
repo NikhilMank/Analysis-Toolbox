@@ -120,3 +120,11 @@ Pipfile.lock
 # Temporary files
 tmp/
 temp/
+
+# Claude Files
+CLAUDE.md
+.claude/
+
+
+PyinstallerCommand.txt
+.git.pre-identity-fix-backup/
