@@ -6,6 +6,7 @@ from utils.config import get_setting, update_setting
 # We will import your actual processing tool
 # (We will wrap your tool's function to match this import in Step 2)
 from tools.difference import run_difference_analysis
+from ui.help_dialog import show_help_dialog
 
 class DifferenceFrame(ctk.CTkFrame):
     def __init__(self, parent):
@@ -13,17 +14,31 @@ class DifferenceFrame(ctk.CTkFrame):
         
         self.file_a_path = ""
         self.file_b_path = ""
+        self.has_header_var = ctk.BooleanVar(value=False)
 
         # Layout Configuration (1 column, multiple rows)
         self.grid_columnconfigure(0, weight=1)
 
-        # 1. Title
+        # 1. Title (with "How to Use" button alongside it)
+        self.title_row = ctk.CTkFrame(self, fg_color="transparent")
+        self.title_row.grid(row=0, column=0, padx=40, pady=(40, 20), sticky="ew")
+        self.title_row.grid_columnconfigure(0, weight=1)
+
         self.title_label = ctk.CTkLabel(
-            self, 
+            self.title_row, 
             text="Difference Finder", 
             font=ctk.CTkFont(size=24, weight="bold")
         )
-        self.title_label.grid(row=0, column=0, padx=40, pady=(40, 20), sticky="w")
+        self.title_label.grid(row=0, column=0, sticky="w")
+
+        self.btn_help = ctk.CTkButton(
+            self.title_row, text="❓ How to Use", width=120, height=28,
+            fg_color="transparent", border_width=1,
+            text_color=("gray10", "gray90"), hover_color=("gray85", "gray20"),
+            font=ctk.CTkFont(size=12),
+            command=self.show_help
+        )
+        self.btn_help.grid(row=0, column=1, sticky="e")
 
         # Description
         self.desc_label = ctk.CTkLabel(
@@ -64,7 +79,17 @@ class DifferenceFrame(ctk.CTkFrame):
         )
         self.lbl_file_b.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
 
-        # 4. Action Button (Run)
+        # 4. Header Option - user decides per run whether the files have a header row
+        self.chk_has_header = ctk.CTkCheckBox(
+            self,
+            text="Files include a header row (first row is column titles, not data)",
+            variable=self.has_header_var,
+            onvalue=True,
+            offvalue=False
+        )
+        self.chk_has_header.grid(row=4, column=0, padx=40, pady=(10, 0), sticky="w")
+
+        # 5. Action Button (Run)
         self.btn_run = ctk.CTkButton(
             self, 
             text="Run Comparison", 
@@ -74,7 +99,7 @@ class DifferenceFrame(ctk.CTkFrame):
             height=40,
             command=self.execute_tool
         )
-        self.btn_run.grid(row=4, column=0, padx=40, pady=40, sticky="w")
+        self.btn_run.grid(row=5, column=0, padx=40, pady=40, sticky="w")
 
     def get_initial_dir(self):
         """Helper to fetch last-used directory from configuration."""
@@ -82,6 +107,38 @@ class DifferenceFrame(ctk.CTkFrame):
         if os.path.exists(last_dir):
             return last_dir
         return os.path.expanduser("~")
+
+    def show_help(self):
+        content = (
+            "DIFFERENCE FINDER\n"
+            "Compares two files completely, row by row, and shows you what's "
+            "unique to each side.\n\n"
+            "WHAT TO UPLOAD\n"
+            "- File A and File B: the two files you want to compare.\n"
+            "- Supported formats: .xlsx, .csv, .txt\n"
+            "- The files don't need to match formats - you can compare an "
+            ".xlsx against a .csv, for example.\n\n"
+            "HEADER ROW\n"
+            "- Check \"Files include a header row\" if the first row of your "
+            "files is column titles, not data.\n"
+            "- Leave it unchecked if your files start straight with data.\n"
+            "- Getting this wrong either treats real data as a header (losing "
+            "that row) or treats a header as data (showing a false "
+            "difference).\n\n"
+            "WHAT COUNTS AS A DIFFERENCE\n"
+            "- A row must match COMPLETELY (every column) to be treated as "
+            "the same entry.\n"
+            "- Leading/trailing spaces are ignored when comparing.\n"
+            "- Capitalization matters - \"DOC1\" and \"doc1\" are treated as "
+            "different values.\n\n"
+            "WHAT YOU GET\n"
+            "- Missing_From_B: rows that are in File A but not in File B.\n"
+            "- Missing_From_A: rows that are in File B but not in File A.\n"
+            "- Both are saved next to File A, in the SAME format as whichever "
+            "file the rows came from.\n"
+            "- If both files match completely, no files are created."
+        )
+        show_help_dialog(self, "How to Use: Difference Finder", content)
 
     def browse_file_a(self):
         file_path = filedialog.askopenfilename(
@@ -117,21 +174,25 @@ class DifferenceFrame(ctk.CTkFrame):
         self.update()  # Force GUI refresh
 
         try:
-            # Call your robust comparison script
-            saved_a, saved_b = run_difference_analysis(self.file_a_path, self.file_b_path)
-            
+            # Call your robust comparison script, passing along the header choice
+            saved_a, count_a, saved_b, count_b = run_difference_analysis(
+                self.file_a_path,
+                self.file_b_path,
+                has_header=self.has_header_var.get()
+            )
+
             # Construct a dynamic success message
             if not saved_a and not saved_b:
                 messagebox.showinfo(
-                    "Success!", 
+                    "Success!",
                     "Both files match perfectly!\nNo differences found, so no reports were generated."
                 )
             else:
                 msg_parts = ["Comparison complete!\n"]
                 if saved_a:
-                    msg_parts.append(f"• Unique to A: {os.path.basename(saved_a)}")
+                    msg_parts.append(f"• Unique to A: {os.path.basename(saved_a)} ({count_a:,} entries)")
                 if saved_b:
-                    msg_parts.append(f"• Unique to B: {os.path.basename(saved_b)}")
+                    msg_parts.append(f"• Unique to B: {os.path.basename(saved_b)} ({count_b:,} entries)")
                 
                 msg_parts.append(f"\nSaved in directory:\n{os.path.dirname(self.file_a_path)}")
                 
@@ -142,3 +203,4 @@ class DifferenceFrame(ctk.CTkFrame):
         finally:
             # Re-enable button
             self.btn_run.configure(state="normal", text="Run Comparison")
+            
