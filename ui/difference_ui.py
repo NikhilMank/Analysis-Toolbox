@@ -109,36 +109,7 @@ class DifferenceFrame(ctk.CTkFrame):
         return os.path.expanduser("~")
 
     def show_help(self):
-        content = (
-            "DIFFERENCE FINDER\n"
-            "Compares two files completely, row by row, and shows you what's "
-            "unique to each side.\n\n"
-            "WHAT TO UPLOAD\n"
-            "- File A and File B: the two files you want to compare.\n"
-            "- Supported formats: .xlsx, .csv, .txt\n"
-            "- The files don't need to match formats - you can compare an "
-            ".xlsx against a .csv, for example.\n\n"
-            "HEADER ROW\n"
-            "- Check \"Files include a header row\" if the first row of your "
-            "files is column titles, not data.\n"
-            "- Leave it unchecked if your files start straight with data.\n"
-            "- Getting this wrong either treats real data as a header (losing "
-            "that row) or treats a header as data (showing a false "
-            "difference).\n\n"
-            "WHAT COUNTS AS A DIFFERENCE\n"
-            "- A row must match COMPLETELY (every column) to be treated as "
-            "the same entry.\n"
-            "- Leading/trailing spaces are ignored when comparing.\n"
-            "- Capitalization matters - \"DOC1\" and \"doc1\" are treated as "
-            "different values.\n\n"
-            "WHAT YOU GET\n"
-            "- Missing_From_B: rows that are in File A but not in File B.\n"
-            "- Missing_From_A: rows that are in File B but not in File A.\n"
-            "- Both are saved next to File A, in the SAME format as whichever "
-            "file the rows came from.\n"
-            "- If both files match completely, no files are created."
-        )
-        show_help_dialog(self, "How to Use: Difference Finder", content)
+        show_help_dialog(self, "difference")
 
     def browse_file_a(self):
         file_path = filedialog.askopenfilename(

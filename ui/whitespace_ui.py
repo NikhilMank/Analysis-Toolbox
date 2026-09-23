@@ -88,30 +88,7 @@ class WhitespaceFrame(ctk.CTkFrame):
         return os.path.expanduser("~")
 
     def show_help(self):
-        content = (
-            "WHITESPACE CLEANER\n"
-            "Removes stray spaces from the start and end of every cell - "
-            "useful before running the Difference or Duplicate Finder, since "
-            "a hidden trailing space can cause false mismatches there.\n\n"
-            "WHAT TO UPLOAD\n"
-            "- One file. Supported formats: .xlsx, .csv only (not .txt - "
-            "text files here have no real \"cells\" to clean).\n\n"
-            "HEADER ROW\n"
-            "- Check \"File includes a header row\" if the first row is "
-            "column titles.\n"
-            "- Header labels get trimmed too if checked - useful, since a "
-            "stray space in a header name is a common reason a column "
-            "doesn't get recognized correctly.\n\n"
-            "WHAT COUNTS AS \"WHITESPACE\"\n"
-            "- Only spaces at the very beginning/end of an entry are "
-            "removed.\n"
-            "- Spaces INSIDE an entry (e.g. \"New York\") are left alone.\n\n"
-            "WHAT YOU GET\n"
-            "- _TRIMMED: the cleaned copy, saved next to the original.\n"
-            "- If nothing needed trimming, no new file is created and "
-            "you'll see an \"Already Clean!\" message instead."
-        )
-        show_help_dialog(self, "How to Use: Whitespace Cleaner", content)
+        show_help_dialog(self, "whitespace")
 
     def browse_file(self):
         file_path = filedialog.askopenfilename(

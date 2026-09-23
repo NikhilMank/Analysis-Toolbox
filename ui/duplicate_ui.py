@@ -88,32 +88,7 @@ class DuplicateFrame(ctk.CTkFrame):
         return os.path.expanduser("~")
 
     def show_help(self):
-        content = (
-            "DUPLICATE FINDER\n"
-            "Scans a single file for rows that are repeated, and produces a "
-            "cleaned copy plus a log of what was removed.\n\n"
-            "WHAT TO UPLOAD\n"
-            "- One file. Supported formats: .xlsx, .csv, .txt\n\n"
-            "HEADER ROW\n"
-            "- Check \"File includes a header row\" if the first row is "
-            "column titles, not data.\n"
-            "- Leave it unchecked if the file starts straight with data.\n"
-            "- If this is set wrong on a headerless file, the first real "
-            "row of data gets silently treated as a header and disappears "
-            "from the results.\n\n"
-            "WHAT COUNTS AS A DUPLICATE\n"
-            "- A row must match COMPLETELY (every column) to be treated as "
-            "a repeat.\n"
-            "- Leading/trailing spaces are ignored. Capitalization matters.\n\n"
-            "WHAT YOU GET\n"
-            "- _CLEANED: the file with duplicates removed (the first "
-            "occurrence of each entry is kept).\n"
-            "- _DUPLICATES_LOG: shows each duplicated entry and how many "
-            "times it was repeated. Only created if duplicates were "
-            "actually found.\n"
-            "- Both are saved next to the original, in the same format."
-        )
-        show_help_dialog(self, "How to Use: Duplicate Finder", content)
+        show_help_dialog(self, "duplicate")
 
     def browse_file(self):
         file_path = filedialog.askopenfilename(
