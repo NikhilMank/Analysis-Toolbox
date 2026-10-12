@@ -1,9 +1,13 @@
 import os
 import customtkinter as ctk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
 from utils.config import get_setting, update_setting
 from tools.duplicates import run_duplicate_analysis
 from ui.help_dialog import show_help_dialog
+from ui.message_dialog import show_info, show_error
+from ui.ui_text import UI_TEXT
+
+STRINGS = UI_TEXT["duplicate"]
 
 class DuplicateFrame(ctk.CTkFrame):
     def __init__(self, parent):
@@ -11,6 +15,7 @@ class DuplicateFrame(ctk.CTkFrame):
         
         self.input_file_path = ""
         self.has_header_var = ctk.BooleanVar(value=False)
+        self._current_lang = "en"
 
         self.grid_columnconfigure(0, weight=1)
 
@@ -37,10 +42,12 @@ class DuplicateFrame(ctk.CTkFrame):
 
         # Description
         self.desc_label = ctk.CTkLabel(
-            self, 
+            self,
             text="Analyze a file to strip out duplicate rows. Saves a cleaned file and a log of removed duplicate entries.",
             font=ctk.CTkFont(size=13),
-            text_color="gray"
+            text_color="gray",
+            wraplength=480,
+            justify="left"
         )
         self.desc_label.grid(row=1, column=0, padx=40, pady=(0, 30), sticky="w")
 
@@ -62,24 +69,34 @@ class DuplicateFrame(ctk.CTkFrame):
         # 3. Header Option - user decides per run whether the file has a header row
         self.chk_has_header = ctk.CTkCheckBox(
             self,
-            text="File includes a header row (first row is column titles, not data)",
+            text="File includes a header row",
             variable=self.has_header_var,
             onvalue=True,
             offvalue=False
         )
         self.chk_has_header.grid(row=3, column=0, padx=40, pady=(10, 0), sticky="w")
 
+        self.header_note_label = ctk.CTkLabel(
+            self,
+            text="First row is column titles, not data.",
+            font=ctk.CTkFont(size=12),
+            text_color="gray",
+            wraplength=480,
+            justify="left"
+        )
+        self.header_note_label.grid(row=4, column=0, padx=40, pady=(2, 0), sticky="w")
+
         # 4. Action Button (Run)
         self.btn_run = ctk.CTkButton(
-            self, 
-            text="Remove Duplicates", 
-            fg_color="#2c8558", 
-            hover_color="#216341", 
+            self,
+            text="Remove Duplicates",
+            fg_color="#2c8558",
+            hover_color="#216341",
             font=ctk.CTkFont(size=14, weight="bold"),
             height=40,
             command=self.execute_tool
         )
-        self.btn_run.grid(row=4, column=0, padx=40, pady=40, sticky="w")
+        self.btn_run.grid(row=5, column=0, padx=40, pady=40, sticky="w")
 
     def get_initial_dir(self):
         last_dir = get_setting("last_opened_folder")
@@ -89,6 +106,21 @@ class DuplicateFrame(ctk.CTkFrame):
 
     def show_help(self):
         show_help_dialog(self, "duplicate")
+
+    def apply_language(self, lang):
+        self._current_lang = lang
+        self.title_label.configure(text=STRINGS["title"][lang])
+        self.btn_help.configure(text=STRINGS["how_to_use_button"][lang])
+        self.desc_label.configure(text=STRINGS["description"][lang])
+        self.btn_browse.configure(text=STRINGS["select_file"][lang])
+        self.chk_has_header.configure(text=STRINGS["header_checkbox"][lang])
+        self.header_note_label.configure(text=STRINGS["header_note"][lang])
+        if not self.input_file_path:
+            self.lbl_file.configure(text=STRINGS["no_file_selected"][lang])
+        if self.btn_run.cget("state") == "disabled":
+            self.btn_run.configure(text=STRINGS["processing"][lang])
+        else:
+            self.btn_run.configure(text=STRINGS["run_button"][lang])
 
     def browse_file(self):
         file_path = filedialog.askopenfilename(
@@ -103,10 +135,10 @@ class DuplicateFrame(ctk.CTkFrame):
 
     def execute_tool(self):
         if not self.input_file_path:
-            messagebox.showerror("Error", "Please select a file to process before running.")
+            show_error(self, "Error", "Please select a file to process before running.")
             return
 
-        self.btn_run.configure(state="disabled", text="Processing...")
+        self.btn_run.configure(state="disabled", text=STRINGS["processing"][self._current_lang])
         self.update()
 
         try:
@@ -126,10 +158,10 @@ class DuplicateFrame(ctk.CTkFrame):
                 
             msg_parts.append(f"\nSaved in directory:\n{os.path.dirname(self.input_file_path)}")
             
-            messagebox.showinfo("Success!", "\n".join(msg_parts))
+            show_info(self, "Success!", "\n".join(msg_parts))
             
         except Exception as e:
-            messagebox.showerror("Processing Error", f"An error occurred:\n\n{str(e)}")
+            show_error(self, "Processing Error", f"An error occurred:\n\n{str(e)}")
         finally:
-            self.btn_run.configure(state="normal", text="Remove Duplicates")
+            self.btn_run.configure(state="normal", text=STRINGS["run_button"][self._current_lang])
             
