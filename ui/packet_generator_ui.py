@@ -1,9 +1,16 @@
 import os
 import customtkinter as ctk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
 from utils.config import get_setting, update_setting
 from tools.packet_generator import run_packet_generation
 from ui.help_dialog import show_help_dialog
+from ui.message_dialog import show_info, show_error
+from ui.ui_text import UI_TEXT
+
+STRINGS = UI_TEXT["packet_generator"]
+GRANULARITY_CODES = ["year", "half-year", "quarter", "month", "day"]
+FINEST_GRANULARITY_CODES = ["half-year", "quarter", "month", "day"]
+GRANULARITY_ORDER = ["year", "half-year", "quarter", "month", "day"]  # coarse -> fine
 
 
 class PacketGeneratorFrame(ctk.CTkFrame):
@@ -11,6 +18,7 @@ class PacketGeneratorFrame(ctk.CTkFrame):
         super().__init__(parent, corner_radius=0, fg_color="transparent")
 
         self.input_file_path = ""
+        self._current_lang = "en"
 
         self.grid_columnconfigure(0, weight=1)
         # Row 0 (the scrollable form) expands; row 1 (the Run button) stays a
@@ -51,7 +59,9 @@ class PacketGeneratorFrame(ctk.CTkFrame):
             self.scroll_frame,
             text="Split a list of dates or timestamps into calendar-aligned packets sized close to a target record count.",
             font=ctk.CTkFont(size=13),
-            text_color="gray"
+            text_color="gray",
+            wraplength=480,
+            justify="left"
         )
         self.desc_label.grid(row=1, column=0, padx=40, pady=(0, 30), sticky="w")
 
@@ -97,18 +107,53 @@ class PacketGeneratorFrame(ctk.CTkFrame):
         self.lbl_granularity = ctk.CTkLabel(self.granularity_frame, text="Start Granularity:", width=120, anchor="w")
         self.lbl_granularity.grid(row=0, column=0, padx=(0, 10), pady=5, sticky="w")
 
-        self.granularity_var = ctk.StringVar(value="year")
+        # granularity_code is the literal value passed to run_packet_generation;
+        # granularity_var only ever holds this language's DISPLAYED label for it,
+        # since the two can differ once the dropdown is translated (see
+        # on_granularity_change / apply_language).
+        self.granularity_code = "year"
+        self.granularity_var = ctk.StringVar(value=STRINGS["granularity_values"]["year"]["en"])
         self.option_granularity = ctk.CTkOptionMenu(
             self.granularity_frame,
-            values=["year", "half-year", "quarter", "month"],
+            values=[STRINGS["granularity_values"][code]["en"] for code in GRANULARITY_CODES],
             variable=self.granularity_var,
+            command=self.on_granularity_change,
             width=200
         )
         self.option_granularity.grid(row=0, column=1, padx=5, pady=5, sticky="w")
 
+        # 3d. Finest Granularity
+        self.finest_frame = ctk.CTkFrame(self.scroll_frame, fg_color="transparent")
+        self.finest_frame.grid(row=6, column=0, padx=40, pady=(0, 0), sticky="ew")
+
+        self.lbl_finest = ctk.CTkLabel(self.finest_frame, text="Finest Granularity:", width=120, anchor="w")
+        self.lbl_finest.grid(row=0, column=0, padx=(0, 10), pady=5, sticky="w")
+
+        # Same code-vs-displayed-label split as the start granularity above.
+        self.finest_code = "day"
+        self.finest_var = ctk.StringVar(value=STRINGS["finest_granularity_values"]["day"]["en"])
+        self.option_finest = ctk.CTkOptionMenu(
+            self.finest_frame,
+            values=[STRINGS["finest_granularity_values"][code]["en"] for code in FINEST_GRANULARITY_CODES],
+            variable=self.finest_var,
+            command=self.on_finest_change,
+            width=200
+        )
+        self.option_finest.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+
+        self.finest_note_label = ctk.CTkLabel(
+            self.scroll_frame,
+            text="",
+            font=ctk.CTkFont(size=12),
+            text_color="gray",
+            wraplength=480,
+            justify="left"
+        )
+        self.finest_note_label.grid(row=7, column=0, padx=40, pady=(0, 10), sticky="w")
+
         # 4. Start Date (optional)
         self.start_frame = ctk.CTkFrame(self.scroll_frame, fg_color="transparent")
-        self.start_frame.grid(row=6, column=0, padx=40, pady=10, sticky="ew")
+        self.start_frame.grid(row=8, column=0, padx=40, pady=10, sticky="ew")
 
         self.lbl_start = ctk.CTkLabel(self.start_frame, text="Start Date:", width=120, anchor="w")
         self.lbl_start.grid(row=0, column=0, padx=(0, 10), pady=5, sticky="w")
@@ -118,7 +163,7 @@ class PacketGeneratorFrame(ctk.CTkFrame):
 
         # 5. End Date (optional)
         self.end_frame = ctk.CTkFrame(self.scroll_frame, fg_color="transparent")
-        self.end_frame.grid(row=7, column=0, padx=40, pady=10, sticky="ew")
+        self.end_frame.grid(row=9, column=0, padx=40, pady=10, sticky="ew")
 
         self.lbl_end = ctk.CTkLabel(self.end_frame, text="End Date:", width=120, anchor="w")
         self.lbl_end.grid(row=0, column=0, padx=(0, 10), pady=5, sticky="w")
@@ -130,35 +175,38 @@ class PacketGeneratorFrame(ctk.CTkFrame):
         self.direction_var = ctk.BooleanVar(value=False)
         self.chk_direction = ctk.CTkCheckBox(
             self.scroll_frame,
-            text="Build backward - start from the most recent date and work toward the oldest",
+            text="Build backward",
             variable=self.direction_var,
             onvalue=True,
             offvalue=False
         )
-        self.chk_direction.grid(row=8, column=0, padx=40, pady=(10, 0), sticky="w")
+        self.chk_direction.grid(row=10, column=0, padx=40, pady=(10, 0), sticky="w")
 
         self.direction_note_label = ctk.CTkLabel(
             self.scroll_frame,
-            text="Unchecked (default): builds oldest-to-newest, and the leftover packet that doesn't fit\n"
-                 "evenly is the most recent data. Checked: builds newest-to-oldest instead, so the\n"
+            text="Unchecked (default): builds oldest-to-newest, and the leftover packet that doesn't fit "
+                 "evenly is the most recent data. Checked: builds newest-to-oldest instead, so the "
                  "leftover packet becomes the oldest data.",
             font=ctk.CTkFont(size=12),
             text_color="gray",
+            wraplength=480,
             justify="left"
         )
-        self.direction_note_label.grid(row=9, column=0, padx=40, pady=(2, 10), sticky="w")
+        self.direction_note_label.grid(row=11, column=0, padx=40, pady=(2, 10), sticky="w")
 
         # 6. Sample Timestamp / Sample Date (optional pair, for ambiguous formats)
         self.sample_note_label = ctk.CTkLabel(
             self.scroll_frame,
             text="If the file's format is unusual or ambiguous, give one real example instead of guessing:",
             font=ctk.CTkFont(size=12),
-            text_color="gray"
+            text_color="gray",
+            wraplength=480,
+            justify="left"
         )
-        self.sample_note_label.grid(row=10, column=0, padx=40, pady=(15, 0), sticky="w")
+        self.sample_note_label.grid(row=12, column=0, padx=40, pady=(15, 0), sticky="w")
 
         self.sample_frame = ctk.CTkFrame(self.scroll_frame, fg_color="transparent")
-        self.sample_frame.grid(row=11, column=0, padx=40, pady=(5, 20), sticky="ew")
+        self.sample_frame.grid(row=13, column=0, padx=40, pady=(5, 20), sticky="ew")
 
         self.lbl_sample_timestamp = ctk.CTkLabel(self.sample_frame, text="Sample Value:", width=120, anchor="w")
         self.lbl_sample_timestamp.grid(row=0, column=0, padx=(0, 10), pady=5, sticky="w")
@@ -199,6 +247,60 @@ class PacketGeneratorFrame(ctk.CTkFrame):
     def show_help(self):
         show_help_dialog(self, "packet_generator")
 
+    def on_granularity_change(self, name):
+        labels = STRINGS["granularity_values"]
+        for code in GRANULARITY_CODES:
+            if labels[code][self._current_lang] == name:
+                self.granularity_code = code
+                return
+
+    def on_finest_change(self, name):
+        labels = STRINGS["finest_granularity_values"]
+        for code in FINEST_GRANULARITY_CODES:
+            if labels[code][self._current_lang] == name:
+                self.finest_code = code
+                return
+
+    def apply_language(self, lang):
+        self._current_lang = lang
+        self.title_label.configure(text=STRINGS["title"][lang])
+        self.btn_help.configure(text=STRINGS["how_to_use_button"][lang])
+        self.desc_label.configure(text=STRINGS["description"][lang])
+        self.btn_browse.configure(text=STRINGS["select_file"][lang])
+        if not self.input_file_path:
+            self.lbl_file.configure(text=STRINGS["no_file_selected"][lang])
+        self.lbl_size.configure(text=STRINGS["packet_size_label"][lang])
+        self.entry_size.configure(placeholder_text=STRINGS["packet_size_placeholder"][lang])
+        self.lbl_tolerance.configure(text=STRINGS["tolerance_label"][lang])
+        self.entry_tolerance.configure(placeholder_text=STRINGS["tolerance_placeholder"][lang])
+        self.lbl_granularity.configure(text=STRINGS["granularity_label"][lang])
+
+        labels = STRINGS["granularity_values"]
+        self.option_granularity.configure(values=[labels[code][lang] for code in GRANULARITY_CODES])
+        self.granularity_var.set(labels[self.granularity_code][lang])
+
+        self.lbl_finest.configure(text=STRINGS["finest_granularity_label"][lang])
+        finest_labels = STRINGS["finest_granularity_values"]
+        self.option_finest.configure(values=[finest_labels[code][lang] for code in FINEST_GRANULARITY_CODES])
+        self.finest_var.set(finest_labels[self.finest_code][lang])
+        self.finest_note_label.configure(text=STRINGS["finest_granularity_note"][lang])
+
+        self.lbl_start.configure(text=STRINGS["start_date_label"][lang])
+        self.entry_start.configure(placeholder_text=STRINGS["date_placeholder_optional"][lang])
+        self.lbl_end.configure(text=STRINGS["end_date_label"][lang])
+        self.entry_end.configure(placeholder_text=STRINGS["date_placeholder_optional"][lang])
+        self.chk_direction.configure(text=STRINGS["direction_checkbox"][lang])
+        self.direction_note_label.configure(text=STRINGS["direction_note"][lang])
+        self.sample_note_label.configure(text=STRINGS["sample_note"][lang])
+        self.lbl_sample_timestamp.configure(text=STRINGS["sample_value_label"][lang])
+        self.entry_sample_timestamp.configure(placeholder_text=STRINGS["sample_value_placeholder"][lang])
+        self.lbl_sample_date.configure(text=STRINGS["sample_date_label"][lang])
+        self.entry_sample_date.configure(placeholder_text=STRINGS["date_placeholder_optional"][lang])
+        if self.btn_run.cget("state") == "disabled":
+            self.btn_run.configure(text=STRINGS["processing"][lang])
+        else:
+            self.btn_run.configure(text=STRINGS["run_button"][lang])
+
     def browse_file(self):
         file_path = filedialog.askopenfilename(
             initialdir=self.get_initial_dir(),
@@ -212,47 +314,56 @@ class PacketGeneratorFrame(ctk.CTkFrame):
 
     def execute_tool(self):
         if not self.input_file_path:
-            messagebox.showerror("Error", "Please select a date file before running.")
+            show_error(self, "Error", "Please select a date file before running.")
             return
 
         size_text = self.entry_size.get().strip()
         if not size_text:
-            messagebox.showerror("Error", "Please enter a Packet Size (N) before running.")
+            show_error(self, "Error", "Please enter a Packet Size (N) before running.")
             return
         try:
             packet_size = int(size_text)
             if packet_size <= 0:
                 raise ValueError
         except ValueError:
-            messagebox.showerror("Error", "Packet Size (N) must be a positive whole number.")
+            show_error(self, "Error", "Packet Size (N) must be a positive whole number.")
             return
 
         tolerance_text = self.entry_tolerance.get().strip()
         if not tolerance_text:
-            messagebox.showerror("Error", "Please enter a Tolerance % before running.")
+            show_error(self, "Error", "Please enter a Tolerance % before running.")
             return
         try:
             tolerance_percent = float(tolerance_text)
             if tolerance_percent < 0:
                 raise ValueError
         except ValueError:
-            messagebox.showerror("Error", "Tolerance % must be a non-negative number (e.g. 20).")
+            show_error(self, "Error", "Tolerance % must be a non-negative number (e.g. 20).")
             return
 
         start_date = self.entry_start.get().strip() or None
         end_date = self.entry_end.get().strip() or None
-        start_granularity = self.granularity_var.get()
+        start_granularity = self.granularity_code
+        finest_granularity = self.finest_code
+        if GRANULARITY_ORDER.index(finest_granularity) < GRANULARITY_ORDER.index(start_granularity):
+            show_error(
+                self,
+                "Error",
+                f"Finest Granularity ({finest_granularity}) cannot be coarser than Start Granularity "
+                f"({start_granularity}). Choose a Start Granularity of {finest_granularity} or coarser."
+            )
+            return
         direction = 'backward' if self.direction_var.get() else 'forward'
 
         sample_timestamp = self.entry_sample_timestamp.get().strip() or None
         sample_timestamp_date = self.entry_sample_date.get().strip() or None
         if (sample_timestamp is None) != (sample_timestamp_date is None):
-            messagebox.showerror(
+            show_error(self,
                 "Error", "Sample Value and Its Date must both be filled in, or both left blank."
             )
             return
 
-        self.btn_run.configure(state="disabled", text="Processing...")
+        self.btn_run.configure(state="disabled", text=STRINGS["processing"][self._current_lang])
         self.update()
 
         try:
@@ -265,6 +376,7 @@ class PacketGeneratorFrame(ctk.CTkFrame):
                 sample_timestamp=sample_timestamp,
                 sample_timestamp_date=sample_timestamp_date,
                 start_granularity=start_granularity,
+                finest_granularity=finest_granularity,
                 direction=direction
             )
 
@@ -272,7 +384,7 @@ class PacketGeneratorFrame(ctk.CTkFrame):
                 msg = "No packets were generated.\n"
                 if warnings:
                     msg += "\n" + "\n".join(f"• {w}" for w in warnings)
-                messagebox.showinfo("No Data", msg)
+                show_info(self, "No Data", msg)
             else:
                 msg_parts = ["Packet report generated!\n"]
                 msg_parts.append(f"• Saved as: {os.path.basename(saved_path)}")
@@ -280,9 +392,9 @@ class PacketGeneratorFrame(ctk.CTkFrame):
                 if warnings:
                     msg_parts.append("\nWarnings:")
                     msg_parts.extend(f"• {w}" for w in warnings)
-                messagebox.showinfo("Success!", "\n".join(msg_parts))
+                show_info(self, "Success!", "\n".join(msg_parts))
 
         except Exception as e:
-            messagebox.showerror("Processing Error", f"An error occurred:\n\n{str(e)}")
+            show_error(self, "Processing Error", f"An error occurred:\n\n{str(e)}")
         finally:
-            self.btn_run.configure(state="normal", text="Generate Packets")
+            self.btn_run.configure(state="normal", text=STRINGS["run_button"][self._current_lang])

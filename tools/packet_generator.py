@@ -577,17 +577,19 @@ _FULL_TIER_GENERATORS_BACKWARD = [_year_candidates_backward, _half_year_candidat
                                    _day_candidates_backward]
 _FULL_TIER_NAMES = ['year', 'half-year', 'quarter', 'month', 'day']
 
-# Every tier except the finest (day) is a valid starting point - day itself
-# isn't offered since starting there would mean no cascade at all.
-_START_GRANULARITY_INDEX = {name: i for i, name in enumerate(_FULL_TIER_NAMES[:-1])}
+# Every tier is a valid starting point. Starting at day means no cascade at
+# all: every boundary is simply the day whose cumulative count lands closest
+# to the target.
+_START_GRANULARITY_INDEX = {name: i for i, name in enumerate(_FULL_TIER_NAMES)}
 
 
-def _tier_lists_for(start_granularity, direction='forward'):
+def _tier_lists_for(start_granularity, direction='forward', finest_granularity='day'):
     """
     Returns (tier_generators, tier_names) - a slice of the full
     year/half-year/quarter/month/day cascade starting from whichever tier
-    `start_granularity` names, running through day (the finest) regardless
-    of where it starts. `direction='backward'` selects the backward
+    `start_granularity` names and ending at whichever tier
+    `finest_granularity` names (day, the true finest, by default).
+    `direction='backward'` selects the backward
     (present -> past) candidate generators instead of the forward ones -
     the tier NAMES are direction-agnostic labels, shared by both.
     """
@@ -596,9 +598,19 @@ def _tier_lists_for(start_granularity, direction='forward'):
             f"start_granularity must be one of {sorted(_START_GRANULARITY_INDEX, key=list(_FULL_TIER_NAMES).index)}, "
             f"got {start_granularity!r}"
         )
+    if finest_granularity not in _FULL_TIER_NAMES:
+        raise ValueError(
+            f"finest_granularity must be one of {list(_FULL_TIER_NAMES)}, got {finest_granularity!r}"
+        )
     idx = _START_GRANULARITY_INDEX[start_granularity]
+    finest_idx = _FULL_TIER_NAMES.index(finest_granularity)
+    if finest_idx < idx:
+        raise ValueError(
+            f"finest_granularity ({finest_granularity}) cannot be coarser than start_granularity "
+            f"({start_granularity})."
+        )
     generators = _FULL_TIER_GENERATORS if direction == 'forward' else _FULL_TIER_GENERATORS_BACKWARD
-    return generators[idx:], _FULL_TIER_NAMES[idx:]
+    return generators[idx:finest_idx + 1], _FULL_TIER_NAMES[idx:finest_idx + 1]
 
 
 # ---------------------------------------------------------------------------
@@ -782,6 +794,15 @@ def _closest_match_raw(packet_size, candidates, count_fn, exhausted_fn):
     return prev_boundary, prev_count, boundary, count, exhausted
 
 
+def _has_day_with_at_least(sorted_dates, lo, hi, n):
+    """True if some single calendar day within [lo, hi] holds n or more
+    records. sorted_dates is ascending, so a run of n equal dates exists
+    exactly when the dates n-1 positions apart are equal."""
+    i = bisect.bisect_left(sorted_dates, lo)
+    j = bisect.bisect_right(sorted_dates, hi)
+    return any(sorted_dates[k] == sorted_dates[k + n - 1] for k in range(i, j - n + 1))
+
+
 def _violation(count, floor, cap):
     """0 if count is within [floor, cap]; how far under floor it is if
     undershooting; how far over cap it is if overshooting."""
@@ -793,7 +814,8 @@ def _violation(count, floor, cap):
 
 
 def _find_packet_boundary(packet_size, floor, cap, tier_generators, tier_names, tier_index, bound,
-                           anchor, count_fn, exhausted_fn, narrow_fn, direction_label, warnings):
+                           anchor, count_fn, exhausted_fn, narrow_fn, direction_label, warnings,
+                           day_escape=None):
     """
     Recursively resolves the next packet's boundary at `tier_index`'s
     granularity (candidates generated from `anchor`, bounded to `bound` -
@@ -811,6 +833,14 @@ def _find_packet_boundary(packet_size, floor, cap, tier_generators, tier_names, 
     tier's search to the specific busting span that triggered it - the
     counting/exhaustion reference point never moves mid-recursion.
     direction_label ('starting'/'ending') only affects warning wording.
+
+    day_escape is None unless the configured finest tier is coarser than
+    day. It is then a (day_generator, has_big_day_fn) pair: if the finest
+    configured tier busts the cap AND has_big_day_fn(lo, hi) says a single
+    day inside the busting span holds at least packet_size records, the
+    cascade is allowed to continue down to day for that packet only (no
+    coarser split could ever help there). Otherwise the busting packet is
+    kept whole, with a warning.
     """
     prev_boundary, prev_count, cur_boundary, cur_count, exhausted = _closest_match_raw(
         packet_size, tier_generators[tier_index](anchor, bound), count_fn, exhausted_fn
@@ -825,8 +855,32 @@ def _find_packet_boundary(packet_size, floor, cap, tier_generators, tier_names, 
     this_boundary, this_count = cur_boundary, cur_count
     is_finest = tier_index == len(tier_generators) - 1
 
-    if this_count <= cap or is_finest:
+    if this_count <= cap:
         return this_boundary, this_count, exhausted, tier_names[tier_index]
+
+    if is_finest:
+        if day_escape is None or tier_names[tier_index] == 'day':
+            return this_boundary, this_count, exhausted, tier_names[tier_index]
+
+        day_generator, has_big_day_fn = day_escape
+        span_lo, span_hi = sorted((narrow_fn(prev_boundary, anchor), this_boundary))
+        if not has_big_day_fn(span_lo, span_hi):
+            warnings.append(
+                f"Packet {direction_label} {_format_date_output(anchor)}: {tier_names[tier_index]}-level "
+                f"granularity required {_format_count_output(this_count)} records, exceeding the tolerance "
+                f"ceiling of {_format_count_output(int(cap))}. {tier_names[tier_index].capitalize()} is the "
+                f"finest granularity selected (and no single day holds {_format_count_output(packet_size)} "
+                f"records or more), so it was kept as one oversized packet."
+            )
+            return this_boundary, this_count, exhausted, tier_names[tier_index]
+
+        warnings.append(
+            f"Packet {direction_label} {_format_date_output(anchor)}: a single day holds at least "
+            f"{_format_count_output(packet_size)} records, so day-level granularity was allowed here even "
+            f"though {tier_names[tier_index]} was selected as the finest granularity."
+        )
+        tier_generators = list(tier_generators) + [day_generator]
+        tier_names = list(tier_names) + ['day']
 
     # Busts cap, and a finer tier exists - resolve it, bounded to this
     # busting span (from wherever prev left off, or this level's own
@@ -838,7 +892,7 @@ def _find_packet_boundary(packet_size, floor, cap, tier_generators, tier_names, 
     next_anchor = narrow_fn(prev_boundary, anchor)
     finer_boundary, finer_count, finer_exhausted, finer_tier_name = _find_packet_boundary(
         packet_size, floor, cap, tier_generators, tier_names, tier_index + 1, this_boundary,
-        next_anchor, count_fn, exhausted_fn, narrow_fn, direction_label, warnings
+        next_anchor, count_fn, exhausted_fn, narrow_fn, direction_label, warnings, day_escape
     )
 
     if finer_exhausted:
@@ -913,7 +967,7 @@ def _find_certain_skip_tier(cap, tier_generators, tier_names, anchor, count_fn):
 
 
 def _build_packets_phase1(sorted_dates, packet_size, range_start, range_end, tolerance_percent,
-                           start_granularity, direction='forward'):
+                           start_granularity, direction='forward', finest_granularity='day'):
     """
     direction='forward' (default): builds from range_start toward range_end,
     packet by packet, oldest to newest - byte-for-byte the original
@@ -935,7 +989,15 @@ def _build_packets_phase1(sorted_dates, packet_size, range_start, range_end, tol
     warnings = []
     floor = packet_size * (1 - tolerance_percent / 100)
     cap = packet_size * (1 + tolerance_percent / 100)
-    tier_generators, tier_names = _tier_lists_for(start_granularity, direction)
+    tier_generators, tier_names = _tier_lists_for(start_granularity, direction, finest_granularity)
+
+    day_escape = None
+    if finest_granularity != 'day':
+        day_generator = _day_candidates if direction == 'forward' else _day_candidates_backward
+        day_escape = (
+            day_generator,
+            lambda lo, hi: _has_day_with_at_least(sorted_dates, lo, hi, packet_size)
+        )
 
     if direction == 'forward':
         current_start = range_start
@@ -951,7 +1013,7 @@ def _build_packets_phase1(sorted_dates, packet_size, range_start, range_end, tol
             start_tier_index = _find_certain_skip_tier(cap, tier_generators, tier_names, current_start, count_fn)
             chosen_boundary, chosen_count, _, tier_used = _find_packet_boundary(
                 packet_size, floor, cap, tier_generators, tier_names, start_tier_index, None,
-                current_start, count_fn, exhausted_fn, narrow_fn, 'starting', warnings
+                current_start, count_fn, exhausted_fn, narrow_fn, 'starting', warnings, day_escape
             )
 
             if chosen_count < floor:
@@ -980,7 +1042,7 @@ def _build_packets_phase1(sorted_dates, packet_size, range_start, range_end, tol
             start_tier_index = _find_certain_skip_tier(cap, tier_generators, tier_names, current_end, count_fn)
             chosen_boundary, chosen_count, _, tier_used = _find_packet_boundary(
                 packet_size, floor, cap, tier_generators, tier_names, start_tier_index, None,
-                current_end, count_fn, exhausted_fn, narrow_fn, 'ending', warnings
+                current_end, count_fn, exhausted_fn, narrow_fn, 'ending', warnings, day_escape
             )
 
             if chosen_count < floor:
@@ -1029,32 +1091,39 @@ def _build_packets_phase1(sorted_dates, packet_size, range_start, range_end, tol
 # nothing left to absorb.
 # ---------------------------------------------------------------------------
 
-def _closest_day_to_target(sorted_dates, start_idx, search_start, search_end, target_count):
+def _closest_day_to_target(sorted_dates, start_idx, search_start, search_end, target_count,
+                           granularity='day'):
     """
-    Scans every day from search_start up to (but not including) search_end
-    and returns whichever day's cumulative count (from start_idx) is
-    closest to target_count - ties favor the larger count, since
-    fewer/larger packets are preferred for this tool.
+    Scans every candidate boundary of the given granularity (every day by
+    default) from search_start up to (but not including) search_end and
+    returns whichever one's cumulative count (from start_idx) is closest to
+    target_count - ties favor the larger count, since fewer/larger packets
+    are preferred for this tool.
 
-    Returns (boundary, count).
+    Returns (boundary, count), or (None, None) if there is no candidate
+    boundary strictly before search_end (only possible above day level).
     """
+    generator = _FULL_TIER_GENERATORS[_FULL_TIER_NAMES.index(granularity)]
     best_boundary, best_count, best_diff = None, None, None
-    d = search_start
-    while d < search_end:
+    for d in generator(search_start, search_end):
+        if d >= search_end:
+            break
         count = bisect.bisect_right(sorted_dates, d) - start_idx
         diff = abs(count - target_count)
         if best_diff is None or diff < best_diff or (diff == best_diff and count > best_count):
             best_boundary, best_count, best_diff = d, count, diff
-        d += timedelta(days=1)
     return best_boundary, best_count
 
 
-def _partition_evenly(sorted_dates, range_start, range_end, num_pieces):
+def _partition_evenly(sorted_dates, range_start, range_end, num_pieces, granularity='day'):
     """
-    Splits [range_start, range_end] into exactly `num_pieces` day-level
-    packets, aiming for each to be an even share of whatever's left at
+    Splits [range_start, range_end] into `num_pieces` packets whose
+    boundaries sit on the given granularity's calendar boundaries (day by
+    default), aiming for each to be an even share of whatever's left at
     each step (so uneven day-to-day density doesn't compound into a lopsided
-    final piece). Returns a list of packet dicts: {'from','to','count'}.
+    final piece). Above day level there may be fewer boundaries available
+    than requested, in which case fewer pieces come back. Returns a list of
+    packet dicts: {'from','to','count'}.
     """
     start_idx = bisect.bisect_left(sorted_dates, range_start)
     total = bisect.bisect_right(sorted_dates, range_end) - start_idx
@@ -1069,8 +1138,10 @@ def _partition_evenly(sorted_dates, range_start, range_end, num_pieces):
         piece_start_idx = bisect.bisect_left(sorted_dates, piece_start)
         target_share = remaining_total / remaining_pieces
         boundary, count = _closest_day_to_target(
-            sorted_dates, piece_start_idx, piece_start, range_end, target_share
+            sorted_dates, piece_start_idx, piece_start, range_end, target_share, granularity
         )
+        if boundary is None:
+            break  # no boundary left at this granularity - the rest is one piece
         pieces.append({'from': piece_start, 'to': boundary, 'count': count})
         piece_start = boundary + timedelta(days=1)
         remaining_total -= count
@@ -1083,7 +1154,7 @@ def _partition_evenly(sorted_dates, range_start, range_end, num_pieces):
 
 
 def _regroup_severely_off(packets, sorted_dates, packet_size, tolerance_percent, warnings,
-                           leftover_at_start=False):
+                           leftover_at_start=False, finest_granularity='day'):
     """
     packets MUST be in chronological (ascending) order - the combined-span
     math below (bisect against sorted_dates using packets[window_start]
@@ -1097,6 +1168,11 @@ def _regroup_severely_off(packets, sorted_dates, packet_size, tolerance_percent,
     from regrouping when undersized - False (default, forward build) means
     it's the LAST (most recent) packet; True (backward build) means it's
     the FIRST (oldest) packet instead.
+
+    finest_granularity: regrouped boundaries only land on this calendar
+    unit's boundaries (day by default) - except in a window where a single
+    day holds at least packet_size records, where day level is allowed
+    (same rule as Phase 1).
     """
     # "Severe" begins one sixth of the way from the tolerance edge toward
     # total nonsense (100% off target). This is always strictly wider than
@@ -1145,7 +1221,12 @@ def _regroup_severely_off(packets, sorted_dates, packet_size, tolerance_percent,
             total = bisect.bisect_right(sorted_dates, combined_to) - start_idx
             num_pieces = max(1, round(total / packet_size))
 
-            new_pieces = _partition_evenly(sorted_dates, combined_from, combined_to, num_pieces)
+            granularity = finest_granularity
+            if granularity != 'day' and _has_day_with_at_least(
+                    sorted_dates, combined_from, combined_to, packet_size):
+                granularity = 'day'
+
+            new_pieces = _partition_evenly(sorted_dates, combined_from, combined_to, num_pieces, granularity)
 
             if all(not is_severely_off(p) for p in new_pieces):
                 break
@@ -1177,7 +1258,8 @@ def _regroup_severely_off(packets, sorted_dates, packet_size, tolerance_percent,
 def run_packet_generation(input_file_path, packet_size, tolerance_percent,
                                              start_date=None, end_date=None,
                                              sample_timestamp=None, sample_timestamp_date=None,
-                                             start_granularity='year', direction='forward'):
+                                             start_granularity='year', direction='forward',
+                                             finest_granularity='day'):
     """
     Reads a single-column file of dates or timestamps and partitions them
     into contiguous, calendar-aligned "packets" (date ranges) whose record
@@ -1269,10 +1351,19 @@ def run_packet_generation(input_file_path, packet_size, tolerance_percent,
         Optional. The date (any supported date format) that
         sample_timestamp is known to represent.
     start_granularity : str
-        'year' (default), 'half-year', 'quarter', or 'month'. Which tier
+        'year' (default), 'half-year', 'quarter', 'month', or 'day'. Which tier
         Phase 1 starts each packet search from - the cascade always runs
         through to day (the finest tier) regardless of where it starts,
         it just skips checking any tier coarser than the one named here.
+    finest_granularity : str
+        'day' (default), 'month', 'quarter', 'half-year' or 'year'. The
+        finest calendar unit a packet boundary may use - the cascade (and
+        Phase 2's regrouping) stops at this tier instead of running on to
+        day. It cannot be coarser than start_granularity. A packet that
+        still busts the tolerance ceiling at this tier is kept whole with
+        a warning, EXCEPT where a single day inside it holds at least
+        packet_size records: day-level granularity is then allowed for
+        that packet, since no coarser split could help there.
     direction : str
         'forward' (default) or 'backward'. Which end of the data
         packetization starts from:
@@ -1309,6 +1400,7 @@ def run_packet_generation(input_file_path, packet_size, tolerance_percent,
         )
     if direction not in ('forward', 'backward'):
         raise ValueError(f"direction must be 'forward' or 'backward', got {direction!r}")
+    _tier_lists_for(start_granularity, direction, finest_granularity)  # validates the pair
 
     raw_values = _read_raw_date_column(input_file_path)
     if not raw_values:
@@ -1364,12 +1456,14 @@ def run_packet_generation(input_file_path, packet_size, tolerance_percent,
 
     if direction == 'forward':
         packets, phase1_warnings = _build_packets_phase1(
-            parsed, packet_size, first_start, last_date, tolerance_percent, start_granularity, direction
+            parsed, packet_size, first_start, last_date, tolerance_percent, start_granularity, direction,
+            finest_granularity
         )
     else:
         last_start = parsed_end_date or last_date
         packets, phase1_warnings = _build_packets_phase1(
-            parsed, packet_size, first_date, last_start, tolerance_percent, start_granularity, direction
+            parsed, packet_size, first_date, last_start, tolerance_percent, start_granularity, direction,
+            finest_granularity
         )
     warnings.extend(phase1_warnings)
 
@@ -1384,7 +1478,7 @@ def run_packet_generation(input_file_path, packet_size, tolerance_percent,
 
     packets = _regroup_severely_off(
         packets, parsed, packet_size, tolerance_percent, warnings,
-        leftover_at_start=(direction == 'backward')
+        leftover_at_start=(direction == 'backward'), finest_granularity=finest_granularity
     )
 
     # The edge of the packet list furthest from where building started is
