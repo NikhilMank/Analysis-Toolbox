@@ -8,7 +8,8 @@ SETTINGS_FILE = os.path.join(BASE_DIR, 'settings.json')
 DEFAULT_SETTINGS = {
     "last_opened_folder": os.path.expanduser("~"),  # Defaults to the user's home directory
     "theme": "System",
-    "language": "en"
+    "language": "en",
+    "app_language": "en"
 }
 
 def load_settings():
