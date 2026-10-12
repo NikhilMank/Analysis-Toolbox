@@ -803,6 +803,37 @@ def _has_day_with_at_least(sorted_dates, lo, hi, n):
     return any(sorted_dates[k] == sorted_dates[k + n - 1] for k in range(i, j - n + 1))
 
 
+_END_OF_NTH = {'year': _end_of_nth_year, 'half-year': _end_of_nth_half_year,
+               'quarter': _end_of_nth_quarter, 'month': _end_of_nth_month}
+
+
+def _heavy_day_zones(sorted_dates, lo, hi, n, granularity):
+    """
+    Date ranges inside [lo, hi] where day-level boundaries are allowed
+    despite a coarser finest granularity: only the calendar unit (month,
+    quarter, ...) that actually contains a day holding n or more records,
+    not everything around it. Returns a list of (zone_start, zone_end),
+    ascending and non-overlapping.
+    """
+    end_of = _END_OF_NTH.get(granularity)
+    if end_of is None:
+        return []
+    i = bisect.bisect_left(sorted_dates, lo)
+    j = bisect.bisect_right(sorted_dates, hi)
+    zones = []
+    k = i
+    while k <= j - n:
+        if sorted_dates[k] == sorted_dates[k + n - 1]:
+            heavy = sorted_dates[k]
+            zone = (end_of(heavy, -1) + timedelta(days=1), end_of(heavy, 0))
+            if not zones or zone[0] > zones[-1][0]:
+                zones.append(zone)
+            k = bisect.bisect_right(sorted_dates, heavy)  # skip the rest of this day
+        else:
+            k += 1
+    return zones
+
+
 def _violation(count, floor, cap):
     """0 if count is within [floor, cap]; how far under floor it is if
     undershooting; how far over cap it is if overshooting."""
@@ -1092,7 +1123,7 @@ def _build_packets_phase1(sorted_dates, packet_size, range_start, range_end, tol
 # ---------------------------------------------------------------------------
 
 def _closest_day_to_target(sorted_dates, start_idx, search_start, search_end, target_count,
-                           granularity='day'):
+                           granularity='day', day_zones=()):
     """
     Scans every candidate boundary of the given granularity (every day by
     default) from search_start up to (but not including) search_end and
@@ -1104,8 +1135,19 @@ def _closest_day_to_target(sorted_dates, start_idx, search_start, search_end, ta
     boundary strictly before search_end (only possible above day level).
     """
     generator = _FULL_TIER_GENERATORS[_FULL_TIER_NAMES.index(granularity)]
+    candidates = generator(search_start, search_end)
+    if day_zones:
+        # Every day inside a heavy-day zone is also a candidate, merged in
+        # with the regular finest-granularity boundaries.
+        zone_days = set()
+        for zone_start, zone_end in day_zones:
+            d = max(zone_start, search_start)
+            while d <= min(zone_end, search_end):
+                zone_days.add(d)
+                d += timedelta(days=1)
+        candidates = sorted(zone_days.union(candidates))
     best_boundary, best_count, best_diff = None, None, None
-    for d in generator(search_start, search_end):
+    for d in candidates:
         if d >= search_end:
             break
         count = bisect.bisect_right(sorted_dates, d) - start_idx
@@ -1115,7 +1157,7 @@ def _closest_day_to_target(sorted_dates, start_idx, search_start, search_end, ta
     return best_boundary, best_count
 
 
-def _partition_evenly(sorted_dates, range_start, range_end, num_pieces, granularity='day'):
+def _partition_evenly(sorted_dates, range_start, range_end, num_pieces, granularity='day', day_zones=()):
     """
     Splits [range_start, range_end] into `num_pieces` packets whose
     boundaries sit on the given granularity's calendar boundaries (day by
@@ -1138,7 +1180,7 @@ def _partition_evenly(sorted_dates, range_start, range_end, num_pieces, granular
         piece_start_idx = bisect.bisect_left(sorted_dates, piece_start)
         target_share = remaining_total / remaining_pieces
         boundary, count = _closest_day_to_target(
-            sorted_dates, piece_start_idx, piece_start, range_end, target_share, granularity
+            sorted_dates, piece_start_idx, piece_start, range_end, target_share, granularity, day_zones
         )
         if boundary is None:
             break  # no boundary left at this granularity - the rest is one piece
@@ -1170,9 +1212,9 @@ def _regroup_severely_off(packets, sorted_dates, packet_size, tolerance_percent,
     the FIRST (oldest) packet instead.
 
     finest_granularity: regrouped boundaries only land on this calendar
-    unit's boundaries (day by default) - except in a window where a single
-    day holds at least packet_size records, where day level is allowed
-    (same rule as Phase 1).
+    unit's boundaries (day by default) - except inside the single unit that
+    contains a day holding at least packet_size records, where day level is
+    allowed (same rule as Phase 1, but never for the rest of the window).
     """
     # "Severe" begins one sixth of the way from the tolerance edge toward
     # total nonsense (100% off target). This is always strictly wider than
@@ -1221,12 +1263,15 @@ def _regroup_severely_off(packets, sorted_dates, packet_size, tolerance_percent,
             total = bisect.bisect_right(sorted_dates, combined_to) - start_idx
             num_pieces = max(1, round(total / packet_size))
 
-            granularity = finest_granularity
-            if granularity != 'day' and _has_day_with_at_least(
-                    sorted_dates, combined_from, combined_to, packet_size):
-                granularity = 'day'
+            # Day boundaries only inside the unit(s) holding a heavy day, so
+            # one big day does not turn the whole window into day-level packets.
+            day_zones = []
+            if finest_granularity != 'day':
+                day_zones = _heavy_day_zones(
+                    sorted_dates, combined_from, combined_to, packet_size, finest_granularity)
 
-            new_pieces = _partition_evenly(sorted_dates, combined_from, combined_to, num_pieces, granularity)
+            new_pieces = _partition_evenly(
+                sorted_dates, combined_from, combined_to, num_pieces, finest_granularity, day_zones)
 
             if all(not is_severely_off(p) for p in new_pieces):
                 break
