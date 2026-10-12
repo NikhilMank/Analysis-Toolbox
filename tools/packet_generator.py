@@ -200,13 +200,25 @@ def _parse_with_candidate(v, fmt):
         if len(v) == expected_len and v.isdigit():
             return datetime.strptime(v, fmt).date()
         digits = _digits_only(v)
-        if len(digits) == expected_len:
+        # ':', '/' and '-' are real date/time separators, never thousands-style
+        # grouping, so a value containing one is not a grouped glued number
+        # (stripping '28/07/2015 00:00' to 12 digits would otherwise let it
+        # tie with the 2-digit-year glued formats).
+        if len(digits) == expected_len and not any(ch in v for ch in ':/-'):
             return datetime.strptime(digits, fmt).date()
         raise ValueError(
             f"'{v}' has {len(digits)} digit(s) after stripping punctuation, but {fmt} "
             f"requires exactly {expected_len}"
         )
-    return datetime.strptime(v, fmt).date()
+    parsed = datetime.strptime(v, fmt)
+    if fmt.endswith('%H%M%S') and parsed.strftime(fmt) != v:
+        # A separated date followed by a GLUED time (e.g. '%y.%m.%d%H%M%S') has
+        # no separator to anchor the flexible-width directives, so strptime can
+        # "succeed" on a plain date like '05.03.2021' by splitting its digits
+        # across day/hour/minute. Real values of this shape are always
+        # fixed-width, so require an exact round trip.
+        raise ValueError(f"'{v}' is not a fixed-width value for {fmt}")
+    return parsed.date()
 
 
 def _count_matches(candidates, rows):
@@ -629,6 +641,10 @@ def _detect_text_encoding(filepath):
         return 'utf-32'
     if head.startswith(codecs.BOM_UTF16_LE) or head.startswith(codecs.BOM_UTF16_BE):
         return 'utf-16'
+    if head.startswith(codecs.BOM_UTF8):
+        # charset_normalizer reports plain 'utf_8' for a BOM'd file, which would
+        # leave the BOM glued to the first value and silently drop that row.
+        return 'utf-8-sig'
 
     with open(filepath, 'rb') as f:
         sample = f.read(_ENCODING_SAMPLE_BYTES)
