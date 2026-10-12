@@ -1,9 +1,14 @@
 import customtkinter as ctk
-from utils.config import get_setting
+from utils.config import get_setting, update_setting
 from ui.difference_ui import DifferenceFrame  # <-- Imports UI for Difference tool
 from ui.duplicate_ui import DuplicateFrame    # <-- Imports UI for Duplicate tool
 from ui.whitespace_ui import WhitespaceFrame  # <-- Imports UI for Whitespace tool
 from ui.packet_generator_ui import PacketGeneratorFrame  # <-- Imports UI for Packet Generator tool
+from ui.packet_matcher_ui import PacketMatcherFrame  # <-- Imports UI for Packet Matcher tool
+from ui.ui_text import UI_TEXT, APP_LANGUAGES
+from ui.help_dialog import show_help_dialog
+
+STRINGS = UI_TEXT["app"]
 
 # Set the overall visual style of the application
 ctk.set_appearance_mode(get_setting("theme"))  # Reads "System", "Dark", or "Light"
@@ -25,7 +30,7 @@ class App(ctk.CTk):
         # 2. Create the Sidebar Frame
         self.sidebar_frame = ctk.CTkFrame(self, width=200, corner_radius=0)
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
-        self.sidebar_frame.grid_rowconfigure(6, weight=1)  # Pushes bottom elements down
+        self.sidebar_frame.grid_rowconfigure(7, weight=1)  # Pushes bottom elements down
 
         # Sidebar Title
         self.logo_label = ctk.CTkLabel(
@@ -76,26 +81,91 @@ class App(ctk.CTk):
         )
         self.packet_button.grid(row=5, column=0, padx=20, pady=10, sticky="ew")
 
+        self.matcher_button = ctk.CTkButton(
+            self.sidebar_frame, text="Packet Matcher",
+            fg_color="transparent", text_color=("gray10", "gray90"),
+            hover_color=("gray70", "gray30"), anchor="w",
+            command=self.show_packet_matcher
+        )
+        self.matcher_button.grid(row=6, column=0, padx=20, pady=10, sticky="ew")
+
+        # 2b. App language selector - sits below the row-7 spacer so it's
+        # always anchored to the bottom of the sidebar
+        self.app_lang_code_by_name = {name: code for code, name in APP_LANGUAGES.items()}
+        initial_app_lang = get_setting("app_language")
+        if initial_app_lang not in APP_LANGUAGES:
+            initial_app_lang = "en"
+
+        self.app_language_var = ctk.StringVar(value=APP_LANGUAGES[initial_app_lang])
+        self.app_language_menu = ctk.CTkOptionMenu(
+            self.sidebar_frame,
+            values=list(APP_LANGUAGES.values()),
+            variable=self.app_language_var,
+            command=self.on_app_language_change,
+            width=160
+        )
+        self.app_language_menu.grid(row=8, column=0, padx=20, pady=(10, 20), sticky="ew")
+
         # 3. Create Content Frames (Wired up to our real custom classes!)
         self.home_frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
         self.diff_frame = DifferenceFrame(self)       # Inserting Difference Frame
         self.dup_frame = DuplicateFrame(self)         # Inserting Duplicate Frame
         self.whitespace_frame = WhitespaceFrame(self) # Inserting Whitespace Frame
         self.packet_frame = PacketGeneratorFrame(self) # Inserting Packet Generator Frame
+        self.matcher_frame = PacketMatcherFrame(self) # Inserting Packet Matcher Frame
 
         # Populate ONLY our remaining placeholders
         self.setup_placeholders()
+
+        # Apply whichever app language was last saved, to the whole app at once
+        self.apply_language(initial_app_lang)
 
         # 4. Initialize default view
         self.show_home()
 
     def setup_placeholders(self):
         """Sets up temporary layouts inside our frames for initial testing."""
+        # Home: "How to Use" button (tool overview) in the top-right corner,
+        # same placement as on every tool frame
+        self.home_help_button = ctk.CTkButton(
+            self.home_frame, text="❓ How to Use", width=120, height=28,
+            fg_color="transparent", border_width=1,
+            text_color=("gray10", "gray90"), hover_color=("gray85", "gray20"),
+            font=ctk.CTkFont(size=12),
+            command=self.show_home_help
+        )
+        self.home_help_button.pack(anchor="ne", padx=40, pady=(40, 0))
+
         # Home Placeholder
-        home_label = ctk.CTkLabel(self.home_frame, text="Welcome to the Analysis Toolbox", font=ctk.CTkFont(size=24, weight="bold"))
-        home_label.pack(pady=40, padx=20)
-        home_sub = ctk.CTkLabel(self.home_frame, text="Select a tool from the sidebar to get started.", font=ctk.CTkFont(size=14))
-        home_sub.pack(pady=10, padx=20)
+        self.home_label = ctk.CTkLabel(self.home_frame, text="Welcome to the Analysis Toolbox", font=ctk.CTkFont(size=24, weight="bold"))
+        self.home_label.pack(pady=(0, 40), padx=20)
+        self.home_sub_label = ctk.CTkLabel(self.home_frame, text="Select a tool from the sidebar to get started.", font=ctk.CTkFont(size=14))
+        self.home_sub_label.pack(pady=10, padx=20)
+
+    def on_app_language_change(self, name):
+        code = self.app_lang_code_by_name[name]
+        update_setting("app_language", code)
+        self.apply_language(code)
+
+    def apply_language(self, lang):
+        """Switches every visible label/button/checkbox across the sidebar,
+        home screen, and all tool frames to the given language code."""
+        self.logo_label.configure(text=STRINGS["sidebar_title"][lang])
+        self.home_button.configure(text=STRINGS["nav_home"][lang])
+        self.diff_button.configure(text=STRINGS["nav_difference"][lang])
+        self.dup_button.configure(text=STRINGS["nav_duplicate"][lang])
+        self.whitespace_button.configure(text=STRINGS["nav_whitespace"][lang])
+        self.packet_button.configure(text=STRINGS["nav_packet"][lang])
+        self.matcher_button.configure(text=STRINGS["nav_matcher"][lang])
+        self.home_help_button.configure(text=STRINGS["home_help_button"][lang])
+        self.home_label.configure(text=STRINGS["home_welcome"][lang])
+        self.home_sub_label.configure(text=STRINGS["home_subtitle"][lang])
+
+        self.diff_frame.apply_language(lang)
+        self.dup_frame.apply_language(lang)
+        self.whitespace_frame.apply_language(lang)
+        self.packet_frame.apply_language(lang)
+        self.matcher_frame.apply_language(lang)
 
     def select_frame_by_name(self, name):
         """Manages highlighting the correct button and displaying the active frame."""
@@ -105,6 +175,7 @@ class App(ctk.CTk):
         self.dup_button.configure(fg_color="transparent")
         self.whitespace_button.configure(fg_color="transparent")
         self.packet_button.configure(fg_color="transparent")
+        self.matcher_button.configure(fg_color="transparent")
 
         # Hide all frames
         self.home_frame.grid_forget()
@@ -112,6 +183,7 @@ class App(ctk.CTk):
         self.dup_frame.grid_forget()
         self.whitespace_frame.grid_forget()
         self.packet_frame.grid_forget()
+        self.matcher_frame.grid_forget()
 
         # Show the chosen frame and highlight its button
         if name == "home":
@@ -129,6 +201,9 @@ class App(ctk.CTk):
         elif name == "packets":
             self.packet_frame.grid(row=0, column=1, sticky="nsew")
             self.packet_button.configure(fg_color=("gray75", "gray25"))
+        elif name == "matcher":
+            self.matcher_frame.grid(row=0, column=1, sticky="nsew")
+            self.matcher_button.configure(fg_color=("gray75", "gray25"))
 
     def show_home(self):
         self.select_frame_by_name("home")
@@ -144,3 +219,9 @@ class App(ctk.CTk):
 
     def show_packet_generator(self):
         self.select_frame_by_name("packets")
+
+    def show_packet_matcher(self):
+        self.select_frame_by_name("matcher")
+
+    def show_home_help(self):
+        show_help_dialog(self, "home")
