@@ -672,6 +672,26 @@ def _read_raw_date_column(filepath):
     of raw, whitespace-stripped string values (blanks dropped). No parsing
     happens here - the format is detected separately.
     """
+    return _read_raw_date_column_counted(filepath)[0]
+
+
+NO_DATE_LABEL = "No date"  # From/To cell text of the report row that counts records without a date
+
+
+def _blank_rows_warning(blank_count, which=''):
+    """Warning text for rows with no value at all (e.g. an SAP record with an
+    empty date), or None if there were none. They are reported in their own
+    "No date" row at the end of the table."""
+    if not blank_count:
+        return None
+    return (
+        f"{blank_count:,} blank row(s) in the {which}file have no date. They belong to no "
+        f"packet, so they are listed in a separate '{NO_DATE_LABEL}' row at the end of the table."
+    )
+
+
+def _read_raw_date_column_counted(filepath):
+    """Like _read_raw_date_column, but returns (values, blank_count)."""
     ext = filepath.lower()
     if not ext.endswith('.txt'):
         raise ValueError(f"Unsupported file type for {filepath}. This tool only supports .txt files.")
@@ -685,13 +705,16 @@ def _read_raw_date_column(filepath):
             lines = f.read().splitlines()
 
     cleaned = []
+    blank = 0
     for v in lines:
         if v is None:
             continue
         s = str(v).strip()
         if s and s.lower() != 'nan':
             cleaned.append(s)
-    return cleaned
+        else:
+            blank += 1
+    return cleaned, blank
 
 
 def _get_unique_filename(filepath):
@@ -1447,9 +1470,12 @@ def run_packet_generation(input_file_path, packet_size, tolerance_percent,
         raise ValueError(f"direction must be 'forward' or 'backward', got {direction!r}")
     _tier_lists_for(start_granularity, direction, finest_granularity)  # validates the pair
 
-    raw_values = _read_raw_date_column(input_file_path)
+    raw_values, blank_rows = _read_raw_date_column_counted(input_file_path)
     if not raw_values:
         raise ValueError("The selected input file is empty.")
+    blank_warning = _blank_rows_warning(blank_rows)
+    if blank_warning:
+        warnings.append(blank_warning)
 
     date_fmt = _sniff_datetime_format(raw_values, sample_timestamp, sample_timestamp_date)
 
@@ -1557,6 +1583,12 @@ def run_packet_generation(input_file_path, packet_size, tolerance_percent,
             "From Date": _format_date_output(p['from']),
             "To Date": _format_date_output(p['to']),
             "No. of Files": _format_count_output(p['count']),
+        })
+    if blank_rows:
+        rows.append({
+            "From Date": NO_DATE_LABEL,
+            "To Date": NO_DATE_LABEL,
+            "No. of Files": _format_count_output(blank_rows),
         })
     df_out = pd.DataFrame(rows)
 

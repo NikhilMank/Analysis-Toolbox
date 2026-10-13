@@ -22,7 +22,9 @@ import pandas as pd
 from datetime import timedelta
 
 from tools.packet_generator import (
-    _read_raw_date_column,
+    _read_raw_date_column_counted,
+    _blank_rows_warning,
+    NO_DATE_LABEL,
     _sniff_datetime_format,
     _parse_with_candidate,
     _parse_single_date,
@@ -64,6 +66,8 @@ def _read_a_ranges(a_list_path):
     for i, (f, t) in enumerate(zip(df["From Date"], df["To Date"]), start=2):
         if pd.isna(f) or pd.isna(t):
             continue
+        if str(f).strip() == NO_DATE_LABEL:
+            continue  # the Packet Generator's "No date" row is a count, not a date range
         try:
             fd, td = _parse_a_date(f), _parse_a_date(t)
         except ValueError as e:
@@ -129,9 +133,12 @@ def run_packet_matching(a_list_path, b_raw_path, out_of_range='extend',
 
     ranges, descending = _read_a_ranges(a_list_path)
 
-    raw_values = _read_raw_date_column(b_raw_path)
+    raw_values, blank_rows = _read_raw_date_column_counted(b_raw_path)
     if not raw_values:
         raise ValueError("The selected B file is empty.")
+    blank_warning = _blank_rows_warning(blank_rows, 'B ')
+    if blank_warning:
+        warnings.append(blank_warning)
 
     date_fmt = _sniff_datetime_format(raw_values, sample_timestamp, sample_timestamp_date)
 
@@ -209,6 +216,13 @@ def run_packet_matching(a_list_path, b_raw_path, out_of_range='extend',
         }
         for fd, td, n in rows
     ]
+
+    if blank_rows:
+        out_rows.append({
+            "From Date": NO_DATE_LABEL,
+            "To Date": NO_DATE_LABEL,
+            "No. of Files": _format_count_output(blank_rows),
+        })
 
     base = os.path.splitext(os.path.basename(b_raw_path))[0]
     out_path = _get_unique_filename(
